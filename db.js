@@ -19,7 +19,8 @@ db.serialize(() => {
             filename TEXT NOT NULL,
             size INTEGER NOT NULL,
             duration INTEGER NOT NULL,
-            upload_time TEXT NOT NULL
+            upload_time TEXT NOT NULL,
+            cloudinary_url TEXT NOT NULL
         )
     `);
 });
