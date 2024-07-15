@@ -8,7 +8,7 @@ const upload = require("../middlewares/multer");
 router.post("/upload", upload.single("video"), uploadVideos);
 
 // Trimming video
-router.post("/trim/:id", trimVideo);
+router.post("/trim/:public_id", trimVideo);
 
 // Merging videos
 router.post("/merge", mergeVideos);

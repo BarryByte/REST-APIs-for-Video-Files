@@ -1,11 +1,13 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
+
 const videoRoutes = require('./routes/video');
 const authMiddleware = require('./middlewares/authMiddleware');
 require('dotenv').config();
 
 const app = express();
+// very important to parse the incoming request body to json
+app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // global authmiddleware which will authenticate all the routes

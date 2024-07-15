@@ -1,7 +1,9 @@
 const db = require("../db");
 const ffmpeg = require("fluent-ffmpeg");
 const fs = require("node:fs");
-const cloudinary = require("../utils/cloudinary");
+const {cloudinary, uploadOnCloudinary} = require("../utils/cloudinary");
+const https = require('https');
+
 
 let durationLimitFlag = false;
 
@@ -97,14 +99,92 @@ const uploadVideos = async (req, res) => {
 	}
 };
 
-const trimVideo = (req, res) => {
-	const { id } = req.params;
-	res.status(200).json({ message: "Video trimmed", id });
-};
+const trimVideo = async (req, res) => {
+    const public_id = req.params.public_id;
+    console.log(public_id);
+    const start = req.body.start;
+    const end = req.body.end;
 
-const mergeVideos = (req, res) => {
-	const { videoIds } = req.body;
-	res.status(200).json({ message: "Videos merged" });
+    // Download the video from Cloudinary
+    // http://res.cloudinary.com/<cloud_name>/video/upload/fl_attachment/<public_id>.mp4
+                    // https://res.cloudinary.com/dvlif7x5p/video/upload/v1720983679/video_uploads/ltfsxj6htxlz3crf0kqx.mp4
+    const videoUrl = `https://res.cloudinary.com/dvlif7x5p/video/upload/v1720983679/video_uploads/${public_id}.mp4`;
+    const inputPath = `/tmp/${public_id}.mp4`;
+    const outputPath = `/tmp/trimmed-${public_id}.mp4`;
+
+    // Download the video locally
+    const download = (url, path) => {
+        return new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(path);
+            const request = https.get(url, (response) => {
+                response.pipe(file);
+                file.on('finish', () => {
+                    file.close(resolve);
+                });
+            }).on('error', (err) => {
+                fs.unlink(path);
+                reject(err);
+            });
+        });
+    };
+
+    try {
+        console.log(`Downloading video from ${videoUrl}`);
+        await download(videoUrl, inputPath);
+        console.log(`Video downloaded successfully, now trimming from ${start} to ${end}` );
+
+		// Flag to track if the response has been sent
+		let responseSent = false;
+        // Trim the video
+        ffmpeg(inputPath)
+            .setStartTime(start)
+            .duration(end)
+            .output(outputPath)
+            .saveToFile("cut.mp4")
+            .on('end', async () => {
+                try {
+                    const response = await uploadOnCloudinary(outputPath);
+                    fs.unlinkSync(inputPath); // Remove the downloaded file
+                    fs.unlinkSync(outputPath); // Remove the trimmed file
+                    return res.status(200).json({ message: 'Video trimmed and uploaded', url: response.secure_url });
+                } catch (err) {
+                    return res.status(500).json({ error: 'Error uploading to Cloudinary', details: err.message });
+                }
+            })
+            .on('error', (err) => {
+                console.error('Error trimming video:', err);
+                return res.status(500).json({ error: 'Error trimming video', details: err.message });
+            })
+            .run();
+    } catch (err) {
+        console.error('Error downloading video:', err);
+        return res.status(500).json({ error: 'Error downloading video', details: err.message });
+    }
+};
+const mergeVideos = async (req, res) => {
+    const { videoIds } = req.body;
+    const videoPaths = videoIds.map(id => path.join(__dirname, `../uploads/${id}`));
+    const outputPath = path.join(__dirname, `../uploads/merged-${Date.now()}.mp4`);
+
+    const ffmpegCommand = ffmpeg();
+    videoPaths.forEach((videoPath) => {
+        ffmpegCommand.input(videoPath);
+    });
+
+    ffmpegCommand
+        .on('end', async () => {
+            try {
+                const response = await uploadOnCloudinary(outputPath);
+                fs.unlinkSync(outputPath); // Remove the locally saved merged file
+                res.status(200).json({ message: 'Videos merged and uploaded', url: response.url });
+            } catch (err) {
+                res.status(500).json({ error: 'Error uploading to Cloudinary', details: err.message });
+            }
+        })
+        .on('error', (err) => {
+            res.status(500).json({ error: 'Error merging videos', details: err.message });
+        })
+        .mergeToFile(outputPath);
 };
 
 module.exports = {

@@ -1,5 +1,4 @@
 const cloudinary = require('cloudinary').v2;
-// const fs = require('node:fs');
 const fs = require('node:fs');
 
 cloudinary.config({
