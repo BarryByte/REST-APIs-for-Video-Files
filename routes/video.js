@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { uploadVideos, trimVideo, mergeVideos, shareableLink } = require("../controllers/video");
+const { uploadVideos, trimVideo, mergeVideos } = require("../controllers/video");
 const upload = require("../middlewares/multer");
 
 
@@ -13,7 +13,6 @@ router.post("/trim/:public_id", trimVideo);
 // Merging videos
 router.post("/merge", mergeVideos);
 
-router.get("/share/:public_id", shareableLink);
 
 module.exports = router;
 

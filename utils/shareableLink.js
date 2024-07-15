@@ -6,7 +6,8 @@ const app = express();
 app.use(express.json());
 
 // Mock database
-const linksDB = {}; // { token: { url: '...', expiresAt: '...' } }
+// Mock database for link storage
+const linksDB = {};
 
 // Function to generate a shareable link
 const generateShareableLink = (url, expiryMinutes) => {
@@ -16,9 +17,4 @@ const generateShareableLink = (url, expiryMinutes) => {
     return `http://yourdomain.com/share/${token}`; // Create a shareable link
 };
 
-// Example endpoint to create a shareable link
-app.post('/generate-link', (req, res) => {
-    const { url, expiryMinutes } = req.body;
-    const shareableLink = generateShareableLink(url, expiryMinutes);
-    res.status(200).json({ link: shareableLink });
-});
+

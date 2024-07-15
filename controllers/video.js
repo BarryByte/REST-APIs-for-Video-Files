@@ -3,24 +3,32 @@ const ffmpeg = require("fluent-ffmpeg");
 const fs = require("node:fs");
 const path = require("node:path");
 const { cloudinary, uploadOnCloudinary } = require("../utils/cloudinary");
-const https = require("https"); 
-const {moment} = require('moment');
+const https = require("https");
 // const axiosInstance = require('./axiosInstance');
 let durationLimitFlag = false;
 
 const downloadFile = (url, dest) => {
-    return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(dest);
-        https.get(url, (response) => {
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close(resolve);
-            });
-        }).on('error', (err) => {
-            fs.unlink(dest);
-            reject(err);
-        });
-    });
+	return new Promise((resolve, reject) => {
+		const file = fs.createWriteStream(dest);
+		https
+			.get(url, (response) => {
+				response.pipe(file);
+				file.on("finish", () => {
+					file.close(resolve);
+				});
+			})
+			.on("error", (err) => {
+				fs.unlink(dest);
+				reject(err);
+			});
+	});
+};
+const generatePrivateDownloadUrl = (publicId, format, expiresAt) => {
+	return cloudinary.utils.private_download_url(publicId, {
+		format: format,
+		expires_at: expiresAt,
+		type: "private"
+	});
 };
 
 const uploadVideos = async (req, res) => {
@@ -79,6 +87,16 @@ const uploadVideos = async (req, res) => {
 				);
 			});
 
+			// Generate a time-limited download URL
+			const publicId = result.public_id; 
+			const format = "mp4"; 
+			const expiresAt = Math.floor(Date.now() / 1000) + 3600; 
+			const downloadUrl = generatePrivateDownloadUrl(
+				publicId,
+				format,
+				expiresAt
+			);
+
 			// Delete local file after successful upload to Cloudinary
 			if (fs.existsSync(filePath)) {
 				fs.unlinkSync(filePath);
@@ -90,7 +108,8 @@ const uploadVideos = async (req, res) => {
 				filename,
 				size,
 				duration,
-				url: result.secure_url
+				url: result.secure_url,
+				downloadUrl
 			});
 		}
 	} catch (err) {
@@ -168,21 +187,27 @@ const trimVideo = async (req, res) => {
 
 				try {
 					const response = await uploadOnCloudinary(outputPath);
+					const publicId = response.public_id; 
+					const format = "mp4"; 
+					const expiresAt = Math.floor(Date.now() / 1000) + 3600; 
+					const downloadUrl = generatePrivateDownloadUrl(
+						publicId,
+						format,
+						expiresAt
+					);
+
 					fs.unlinkSync(inputPath); // Remove the downloaded file
 					fs.unlinkSync(outputPath); // Remove the trimmed file
-					return res
-						.status(200)
-						.json({
-							message: "Video trimmed and uploaded",
-							url: response.secure_url
-						});
+					return res.status(200).json({
+						message: "Video trimmed and uploaded",
+						url: response.secure_url,
+						downloadUrl
+					});
 				} catch (err) {
-					return res
-						.status(500)
-						.json({
-							error: "Error uploading to Cloudinary",
-							details: err.message
-						});
+					return res.status(500).json({
+						error: "Error uploading to Cloudinary",
+						details: err.message
+					});
 				}
 			})
 			.on("error", (err) => {
@@ -190,12 +215,10 @@ const trimVideo = async (req, res) => {
 				responseSent = true;
 
 				console.error("Error trimming video:", err);
-				return res
-					.status(500)
-					.json({
-						error: "Error trimming video",
-						details: err.message
-					});
+				return res.status(500).json({
+					error: "Error trimming video",
+					details: err.message
+				});
 			})
 			.run();
 	} catch (err) {
@@ -206,81 +229,101 @@ const trimVideo = async (req, res) => {
 	}
 };
 const mergeVideos = async (req, res) => {
-    const { videoIds } = req.body;
-    console.log(videoIds);
+	const { videoIds } = req.body;
+	console.log(videoIds);
 
-    if (!videoIds || !Array.isArray(videoIds) || videoIds.length === 0) {
-        return res.status(400).json({ error: "Invalid or missing videoIds" });
-    }
+	if (!videoIds || !Array.isArray(videoIds) || videoIds.length === 0) {
+		return res.status(400).json({ error: "Invalid or missing videoIds" });
+	}
 
-    const outputPath = path.join(__dirname, `../uploads/merged-${Date.now()}.mp4`);
+	const outputPath = path.join(
+		__dirname,
+		`../uploads/merged-${Date.now()}.mp4`
+	);
 
-    try {
-        // Download all videos from Cloudinary
-        const videoPaths = await Promise.all(videoIds.map(async (id) => {
-            const videoUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/video/upload/v1720983679/${id}.mp4`;
-            const videoPath = path.join(__dirname, `../uploads/${id}.mp4`);
-            await downloadFile(videoUrl, videoPath);
-            return videoPath;
-        }));
+	try {
+		// Download all videos from Cloudinary
+		const videoPaths = await Promise.all(
+			videoIds.map(async (id) => {
+				const videoUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/video/upload/v1720983679/${id}.mp4`;
+				const videoPath = path.join(__dirname, `../uploads/${id}.mp4`);
+				await downloadFile(videoUrl, videoPath);
+				return videoPath;
+			})
+		);
 
-        // Create a temporary file listing all video files
-        const fileListPath = path.join(__dirname, `../uploads/filelist-${Date.now()}.txt`);
-        const fileListContent = videoPaths.map((videoPath) => `file '${videoPath}'`).join('\n');
-        fs.writeFileSync(fileListPath, fileListContent);
+		// Create a temporary file listing all video files
+		const fileListPath = path.join(
+			__dirname,
+			`../uploads/filelist-${Date.now()}.txt`
+		);
+		const fileListContent = videoPaths
+			.map((videoPath) => `file '${videoPath}'`)
+			.join("\n");
+		fs.writeFileSync(fileListPath, fileListContent);
 
-        // Merge the videos
-        const ffmpegCommand = ffmpeg()
-            .input(fileListPath)
-            .inputOptions(['-f concat', '-safe 0'])
-            .output(outputPath)
-            .on('end', async () => {
-                // Cleanup temporary file list and downloaded videos
-                fs.unlinkSync(fileListPath);
-                videoPaths.forEach(videoPath => fs.unlinkSync(videoPath));
+		// Merge the videos
+		const ffmpegCommand = ffmpeg()
+			.input(fileListPath)
+			.inputOptions(["-f concat", "-safe 0"])
+			.output(outputPath)
+			.on("end", async () => {
+				// Cleanup temporary file list and downloaded videos
+				fs.unlinkSync(fileListPath);
+				videoPaths.forEach((videoPath) => fs.unlinkSync(videoPath));
 
-                try {
-                    const response = await uploadOnCloudinary(outputPath);
-                    fs.unlinkSync(outputPath); // Remove the locally saved merged file
-                    return res.status(200).json({ message: "Videos merged and uploaded", url: response.secure_url });
-                } catch (err) {
-                    return res.status(500).json({ error: "Error uploading to Cloudinary", details: err.message });
-                }
-            })
-            .on('error', (err) => {
-                // Cleanup temporary file list and downloaded videos on error
-                fs.unlinkSync(fileListPath);
-                videoPaths.forEach(videoPath => fs.unlinkSync(videoPath));
-                return res.status(500).json({ error: "Error merging videos", details: err.message });
-            })
-            .run();
-    } catch (err) {
-        return res.status(500).json({ error: "Error downloading videos", details: err.message });
-    }
+				try {
+					const response = await uploadOnCloudinary(outputPath);
+					const publicId = response.public_id; 
+					const format = "mp4"; 
+					const expiresAt = Math.floor(Date.now() / 1000) + 3600; 
+					const downloadUrl = generatePrivateDownloadUrl(
+						publicId,
+						format,
+						expiresAt
+					);
+
+					fs.unlinkSync(outputPath); // Remove the locally saved merged file
+					return res.status(200).json({
+						message: "Videos merged and uploaded",
+						url: response.secure_url,
+						downloadUrl
+					});
+				} catch (err) {
+					return res.status(500).json({
+						error: "Error uploading to Cloudinary",
+						details: err.message
+					});
+				}
+			})
+			.on("error", (err) => {
+				// Cleanup temporary file list and downloaded videos on error
+				fs.unlinkSync(fileListPath);
+				videoPaths.forEach((videoPath) => fs.unlinkSync(videoPath));
+				return res.status(500).json({
+					error: "Error merging videos",
+					details: err.message
+				});
+			})
+			.run();
+	} catch (err) {
+		return res
+			.status(500)
+			.json({ error: "Error downloading videos", details: err.message });
+	}
 };
 
-// Endpoint to access shared link
-const shareableLink = async (req, res) => {
-    const { token } = req.params;
-    const linkData = linksDB[token];
+const publicId = "my_picID";
+const format = "video";
+const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
 
-    if (!linkData) {
-        return res.status(404).json({ error: 'Link not found or expired.' });
-    }
-
-    // Check if the link has expired
-    if (moment().isAfter(moment(linkData.expiresAt))) {
-        delete linksDB[token]; // Optionally remove expired link
-        return res.status(410).json({ error: 'Link has expired.' });
-    }
-
-    // Return the URL or redirect to it
-    res.status(200).json({ url: linkData.url });
-};
+const downloadUrl = generatePrivateDownloadUrl(publicId, format, expiresAt);
+console.log("Download URL:", downloadUrl);
 
 module.exports = {
 	uploadVideos,
 	trimVideo,
-	mergeVideos,
-	shareableLink
+	mergeVideos
+	// shareableLink,
+	// generateLink
 };
